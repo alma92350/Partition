@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Partition Copier — Sheet Music to MIDI</title>
+<style>
+  :root {
+    --bg: #1e1f24;
+    --panel: #282a31;
+    --panel2: #30333c;
+    --accent: #4f9dff;
+    --accent2: #ffb44f;
+    --text: #e8eaef;
+    --muted: #9aa0ad;
+    --line: #3c3f48;
+    --danger: #ff5d5d;
+    --ok: #4fd07a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header h1 small { color: var(--muted); font-weight: 400; }
+
+  .main { flex: 1; display: flex; min-height: 0; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 270px; background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .group { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .group h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); margin: 0 0 8px; font-weight: 700;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  label.small { font-size: 12px; color: var(--muted); min-width: 64px; }
+
+  button, .btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; cursor: pointer;
+    transition: .12s; display: inline-flex; align-items: center; gap: 6px; justify-content: center;
+  }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); border-color: var(--accent); color: #06203f; font-weight: 600; }
+  button.full { width: 100%; }
+  button.danger:hover { border-color: var(--danger); color: var(--danger); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06203f; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  .toolgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .toolgrid.three { grid-template-columns: 1fr 1fr 1fr; }
+
+  input[type="range"] { flex: 1; accent-color: var(--accent); }
+  input[type="number"], select, input[type="text"] {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 5px; padding: 5px 7px; font-size: 13px; width: 100%;
+  }
+  input[type="file"] { display: none; }
+  .valbadge { font-size: 12px; color: var(--accent2); min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* Canvas / stage */
+  .stage-wrap { flex: 1; position: relative; overflow: auto; background:
+      repeating-conic-gradient(#23252b 0% 25%, #1c1d22 0% 50%) 50% / 22px 22px; }
+  .stage { position: relative; transform-origin: 0 0; }
+  #sheetImg { display: block; max-width: none; user-select: none; pointer-events: none; }
+  #overlay { position: absolute; left: 0; top: 0; }
+  .empty-hint {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 10px; color: var(--muted); text-align: center; pointer-events: none;
+  }
+  .empty-hint .big { font-size: 17px; color: var(--text); }
+
+  footer {
+    padding: 6px 14px; background: var(--panel); border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--muted); display: flex; gap: 18px; align-items: center;
+  }
+  .pill { background: var(--panel2); border:1px solid var(--line); padding:2px 8px; border-radius: 20px; }
+  .hint { font-size: 11px; color: var(--muted); line-height: 1.4; margin-top: 6px; }
+  .staff-list { display: flex; flex-direction: column; gap: 4px; max-height: 130px; overflow-y: auto; }
+  .staff-item {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 5px 7px;
+    border: 1px solid var(--line); border-radius: 5px; cursor: pointer; background: var(--bg);
+  }
+  .staff-item.sel { border-color: var(--accent); background: #2a3346; }
+  .staff-item .sw { width: 10px; height: 10px; border-radius: 2px; }
+  .zoomctl { display:flex; align-items:center; gap:6px; }
+  kbd { background: var(--bg); border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; font-size:11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎼 Partition Copier <small>— trace a staff over your sheet, place notes, export MIDI</small></h1>
+  <div style="flex:1"></div>
+  <div class="zoomctl">
+    <button id="zoomOut" title="Zoom out">−</button>
+    <span class="pill" id="zoomLabel">100%</span>
+    <button id="zoomIn" title="Zoom in">+</button>
+    <button id="zoomFit" title="Fit">Fit</button>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="sidebar">
+    <div class="group">
+      <h2>1 · Sheet image</h2>
+      <button class="full primary" id="uploadBtn">📁 Upload partition image</button>
+      <input type="file" id="fileInput" accept="image/*" />
+      <div class="row" style="margin-top:8px;">
+        <label class="small">Opacity</label>
+        <input type="range" id="imgOpacity" min="0" max="100" value="100" />
+        <span class="valbadge" id="imgOpacityVal">100</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>2 · Tool</h2>
+      <div class="toolgrid three">
+        <button data-tool="select" class="tool active" title="Move / scale staff">✋ Move</button>
+        <button data-tool="note" class="tool" title="Place notes">🎵 Note</button>
+        <button data-tool="erase" class="tool" title="Delete notes">🩹 Erase</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>3 · Staves (portées)</h2>
+      <button class="full" id="addStaff">➕ Add staff</button>
+      <div class="staff-list" id="staffList" style="margin-top:8px;"></div>
+      <div id="staffProps" style="display:none; margin-top:10px;">
+        <div class="row">
+          <label class="small">Clef</label>
+          <select id="staffClef">
+            <option value="treble">Treble 𝄞</option>
+            <option value="bass">Bass 𝄢</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="small">Width</label>
+          <input type="range" id="staffWidth" min="80" max="3000" />
+        </div>
+        <div class="row">
+          <label class="small">Spacing</label>
+          <input type="range" id="staffSpacing" min="6" max="60" step="0.5" />
+        </div>
+        <button class="full danger" id="delStaff">🗑 Delete this staff</button>
+      </div>
+      <div class="hint">Drag the staff body to move it. Drag the round handle (left) to move, the square handle (right) to resize width.</div>
+    </div>
+
+    <div class="group">
+      <h2>4 · Note to place</h2>
+      <div class="toolgrid three">
+        <button data-dur="0.25" class="dur" title="Double croche (16th)">𝅘𝅥𝅯 1/16</button>
+        <button data-dur="0.5" class="dur active" title="Croche (8th)">𝅘𝅥𝅮 1/8</button>
+        <button data-dur="1" class="dur" title="Noire (quarter)">♩ 1/4</button>
+      </div>
+      <div class="toolgrid three" style="margin-top:6px;">
+        <button data-acc="-1" class="acc" title="Flat">♭</button>
+        <button data-acc="0" class="acc active" title="Natural">♮</button>
+        <button data-acc="1" class="acc" title="Sharp">♯</button>
+      </div>
+      <div class="hint">Click on a staff to drop a note. Vertical position snaps to lines &amp; spaces and decides the pitch.</div>
+    </div>
+
+    <div class="group">
+      <h2>5 · Playback &amp; export</h2>
+      <div class="row">
+        <label class="small">Tempo</label>
+        <input type="number" id="tempo" min="30" max="280" value="100" />
+        <span class="small">BPM</span>
+      </div>
+      <div class="toolgrid">
+        <button id="playBtn" class="primary">▶ Play</button>
+        <button id="stopBtn">⏹ Stop</button>
+      </div>
+      <button class="full" id="exportMidi" style="margin-top:6px;">💾 Export MIDI (.mid)</button>
+      <div class="toolgrid" style="margin-top:6px;">
+        <button id="saveProj">⬇ Save project</button>
+        <button id="loadProj">⬆ Load project</button>
+      </div>
+      <input type="file" id="projInput" accept="application/json" />
+      <button class="full danger" id="clearNotes" style="margin-top:6px;">Clear all notes</button>
+    </div>
+  </aside>
+
+  <div class="stage-wrap" id="stageWrap">
+    <div class="stage" id="stage">
+      <img id="sheetImg" alt="" />
+      <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+    <div class="empty-hint" id="emptyHint">
+      <div class="big">No partition loaded</div>
+      <div>Click “Upload partition image” to begin, then add a staff over it.</div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span class="pill" id="noteCount">0 notes</span>
+  <span id="statusMsg">Ready.</span>
+  <div style="flex:1"></div>
+  <span>Pitch under cursor: <span class="pill" id="pitchHover">—</span></span>
+</footer>
+
+<script>
+/* ============================================================
+   Partition Copier — single-file SPA
+   Image layer + adjustable staff overlay + note entry + MIDI
+   ============================================================ */
+
+const NS = "http://www.w3.org/2000/svg";
+const WHITE = ['C','D','E','F','G','A','B'];
+const SEMI  = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+
+// Clef anchor: the bottom line of the 5-line staff.
+const CLEF_BASE = {
+  treble: { letter: 'E', octave: 4 }, // bottom line = E4
+  bass:   { letter: 'G', octave: 2 }, // bottom line = G2
+};
+
+const STAFF_COLORS = ['#4f9dff','#ffb44f','#4fd07a','#e36bff','#ff6b6b','#37d6d6'];
+
+// ---- State -------------------------------------------------
+const state = {
+  imageURL: null,
+  imgW: 0, imgH: 0,
+  staves: [],          // {id, x, y, width, spacing, clef, color}
+  notes: [],           // {id, staffId, dx (0..1), slot, dur, acc}
+  selectedStaff: null,
+  tool: 'select',
+  dur: 0.5,
+  acc: 0,
+  zoom: 1,
+  nextId: 1,
+};
+const uid = () => state.nextId++;
+
+// ---- DOM refs ----------------------------------------------
+const $ = id => document.getElementById(id);
+const stage = $('stage'), overlay = $('overlay'), img = $('sheetImg');
+const stageWrap = $('stageWrap'), emptyHint = $('emptyHint');
+
+// ============================================================
+//  Image upload
+// ============================================================
+$('uploadBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => loadImage(r.result);
+  r.readAsDataURL(f);
+};
+function loadImage(url) {
+  state.imageURL = url;
+  img.onload = () => {
+    state.imgW = img.naturalWidth; state.imgH = img.naturalHeight;
+    stage.style.width = state.imgW + 'px';
+    stage.style.height = state.imgH + 'px';
+    overlay.setAttribute('width', state.imgW);
+    overlay.setAttribute('height', state.imgH);
+    overlay.setAttribute('viewBox', `0 0 ${state.imgW} ${state.imgH}`);
+    emptyHint.style.display = 'none';
+    if (state.staves.length === 0) addStaff();
+    fitZoom();
+    render();
+    status('Image loaded — add or position a staff, then place notes.');
+  };
+  img.src = url;
+}
+$('imgOpacity').oninput = e => {
+  img.style.opacity = e.target.value / 100;
+  $('imgOpacityVal').textContent = e.target.value;
+};
+
+// ============================================================
+//  Tools
+// ============================================================
+document.querySelectorAll('.tool').forEach(b => b.onclick = () => {
+  state.tool = b.dataset.tool;
+  document.querySelectorAll('.tool').forEach(x => x.classList.toggle('active', x === b));
+  overlay.style.cursor = state.tool === 'note' ? 'crosshair'
+                       : state.tool === 'erase' ? 'not-allowed' : 'default';
+});
+document.querySelectorAll('.dur').forEach(b => b.onclick = () => {
+  state.dur = parseFloat(b.dataset.dur);
+  document.querySelectorAll('.dur').forEach(x => x.classList.toggle('active', x === b));
+});
+document.querySelectorAll('.acc').forEach(b => b.onclick = () => {
+  state.acc = parseInt(b.dataset.acc);
+  document.querySelectorAll('.acc').forEach(x => x.classList.toggle('active', x === b));
+});
+
+// ============================================================
+//  Staves
+// ============================================================
+$('addStaff').onclick = addStaff;
+function addStaff() {
+  const i = state.staves.length;
+  const s = {
+    id: uid(),
+    x: 60,
+    y: 80 + i * 130,
+    width: Math.min(700, (state.imgW || 760) - 120),
+    spacing: 16,
+    clef: 'treble',
+    color: STAFF_COLORS[i % STAFF_COLORS.length],
+  };
+  state.staves.push(s);
+  selectStaff(s.id);
+  render();
+}
+function selectStaff(id) {
+  state.selectedStaff = id;
+  const s = state.staves.find(x => x.id === id);
+  const props = $('staffProps');
+  if (!s) { props.style.display = 'none'; render(); return; }
+  props.style.display = 'block';
+  $('staffClef').value = s.clef;
+  $('staffWidth').value = s.width;
+  $('staffSpacing').value = s.spacing;
+  renderStaffList();
+  render();
+}
+$('staffClef').onchange = e => { const s = sel(); if (s) { s.clef = e.target.value; render(); } };
+$('staffWidth').oninput = e => { const s = sel(); if (s) { s.width = +e.target.value; render(); } };
+$('staffSpacing').oninput = e => { const s = sel(); if (s) { s.spacing = +e.target.value; render(); } };
+$('delStaff').onclick = () => {
+  const s = sel(); if (!s) return;
+  state.notes = state.notes.filter(n => n.staffId !== s.id);
+  state.staves = state.staves.filter(x => x.id !== s.id);
+  state.selectedStaff = state.staves[0]?.id ?? null;
+  selectStaff(state.selectedStaff);
+  render();
+};
+const sel = () => state.staves.find(x => x.id === state.selectedStaff);
+
+function renderStaffList() {
+  const list = $('staffList'); list.innerHTML = '';
+  state.staves.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'staff-item' + (s.id === state.selectedStaff ? ' sel' : '');
+    d.innerHTML = `<span class="sw" style="background:${s.color}"></span>
+      Staff ${i + 1} · ${s.clef} · ${state.notes.filter(n => n.staffId === s.id).length} notes`;
+    d.onclick = () => selectStaff(s.id);
+    list.appendChild(d);
+  });
+}
+
+// ============================================================
+//  Pitch math
+// ============================================================
+// slot 0 = bottom line; +1 per line/space going up (diatonic step).
+function slotToMidi(slot, clef, acc) {
+  const base = CLEF_BASE[clef];
+  const baseIdx = WHITE.indexOf(base.letter);
+  const li = baseIdx + slot;
+  const octave = base.octave + Math.floor(li / 7);
+  const letter = WHITE[((li % 7) + 7) % 7];
+  return (octave + 1) * 12 + SEMI[letter] + acc;
+}
+function midiToName(m) {
+  const names = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+  return names[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
+}
+// Geometry helpers
+function bottomLineY(s) { return s.y + 4 * s.spacing; }            // y of line index 0 (bottom)
+function slotFromY(s, y) { return Math.round((bottomLineY(s) - y) / (s.spacing / 2)); }
+function yFromSlot(s, slot) { return bottomLineY(s) - slot * (s.spacing / 2); }
+
+// ============================================================
+//  Render (SVG)
+// ============================================================
+function render() {
+  overlay.innerHTML = '';
+  state.staves.forEach(drawStaff);
+  state.notes.forEach(drawNote);
+  renderStaffList();
+  $('noteCount').textContent = state.notes.length + ' note' + (state.notes.length === 1 ? '' : 's');
+  $('staffProps').style.display = sel() ? 'block' : 'none';
+}
+
+function drawStaff(s) {
+  const seld = s.id === state.selectedStaff;
+  const g = document.createElementNS(NS, 'g');
+  // 5 lines (index 4 top → 0 bottom)
+  for (let i = 0; i < 5; i++) {
+    const y = s.y + i * s.spacing;
+    const ln = document.createElementNS(NS, 'line');
+    ln.setAttribute('x1', s.x); ln.setAttribute('x2', s.x + s.width);
+    ln.setAttribute('y1', y); ln.setAttribute('y2', y);
+    ln.setAttribute('stroke', s.color);
+    ln.setAttribute('stroke-width', seld ? 1.6 : 1.1);
+    ln.setAttribute('opacity', seld ? 0.95 : 0.6);
+    g.appendChild(ln);
+  }
+  // clef label
+  const cl = document.createElementNS(NS, 'text');
+  cl.setAttribute('x', s.x - 4); cl.setAttribute('y', s.y + 3.2 * s.spacing);
+  cl.setAttribute('font-size', s.spacing * 3.4);
+  cl.setAttribute('text-anchor', 'end'); cl.setAttribute('fill', s.color);
+  cl.textContent = s.clef === 'treble' ? '𝄞' : '𝄢';
+  g.appendChild(cl);
+
+  // interaction strip (move by dragging the staff body)
+  const strip = document.createElementNS(NS, 'rect');
+  strip.setAttribute('x', s.x); strip.setAttribute('y', s.y - s.spacing);
+  strip.setAttribute('width', s.width); strip.setAttribute('height', s.spacing * 6);
+  strip.setAttribute('fill', 'transparent');
+  if (state.tool === 'select') {
+    strip.style.cursor = 'move';
+    strip.addEventListener('pointerdown', ev => startStaffDrag(ev, s, 'move'));
+  } else if (state.tool === 'note') {
+    strip.style.cursor = 'crosshair';
+    strip.addEventListener('pointerdown', ev => placeNote(ev, s));
+  }
+  g.appendChild(strip);
+
+  // handles (only when selected & select tool)
+  if (seld && state.tool === 'select') {
+    const mid = s.y + 2 * s.spacing;
+    const h1 = handle(s.x, mid, s.color, 'circle');
+    h1.addEventListener('pointerdown', ev => startStaffDrag(ev, s, 'move'));
+    g.appendChild(h1);
+    const h2 = handle(s.x + s.width, mid, '#fff', 'rect');
+    h2.addEventListener('pointerdown', ev => startStaffDrag(ev, s, 'width'));
+    g.appendChild(h2);
+  }
+  overlay.appendChild(g);
+}
+function handle(x, y, color, shape) {
+  const el = document.createElementNS(NS, shape === 'circle' ? 'circle' : 'rect');
+  if (shape === 'circle') { el.setAttribute('cx', x); el.setAttribute('cy', y); el.setAttribute('r', 6); }
+  else { el.setAttribute('x', x - 5); el.setAttribute('y', y - 5); el.setAttribute('width', 10); el.setAttribute('height', 10); }
+  el.setAttribute('fill', color); el.setAttribute('stroke', '#000'); el.setAttribute('stroke-width', 1);
+  el.style.cursor = shape === 'circle' ? 'move' : 'ew-resize';
+  return el;
+}
+
+function drawNote(n) {
+  const s = state.staves.find(x => x.id === n.staffId); if (!s) return;
+  const x = s.x + n.dx * s.width;
+  const y = yFromSlot(s, n.slot);
+  const rx = s.spacing * 0.62, ry = s.spacing * 0.46;
+  const g = document.createElementNS(NS, 'g');
+  g.style.cursor = state.tool === 'erase' ? 'not-allowed' : 'pointer';
+
+  // ledger lines if outside the staff (slots 0..8 are on-staff)
+  for (let sl = 10; sl <= n.slot; sl += 2) addLedger(g, s, x, sl);
+  for (let sl = -2; sl >= n.slot; sl -= 2) addLedger(g, s, x, sl);
+
+  // notehead
+  const head = document.createElementNS(NS, 'ellipse');
+  head.setAttribute('cx', x); head.setAttribute('cy', y);
+  head.setAttribute('rx', rx); head.setAttribute('ry', ry);
+  head.setAttribute('transform', `rotate(-20 ${x} ${y})`);
+  head.setAttribute('fill', s.color);
+  g.appendChild(head);
+
+  // stem
+  const up = n.slot < 4;
+  const sx = up ? x + rx * 0.9 : x - rx * 0.9;
+  const sy2 = up ? y - s.spacing * 3.2 : y + s.spacing * 3.2;
+  const stem = document.createElementNS(NS, 'line');
+  stem.setAttribute('x1', sx); stem.setAttribute('y1', y);
+  stem.setAttribute('x2', sx); stem.setAttribute('y2', sy2);
+  stem.setAttribute('stroke', s.color); stem.setAttribute('stroke-width', 1.6);
+  g.appendChild(stem);
+
+  // flags for croche (1) / double croche (2)
+  const flags = n.dur <= 0.25 ? 2 : n.dur <= 0.5 ? 1 : 0;
+  for (let f = 0; f < flags; f++) {
+    const fy = sy2 + (up ? f * s.spacing * 0.75 : -f * s.spacing * 0.75);
+    const fl = document.createElementNS(NS, 'path');
+    const dir = up ? 1 : -1;
+    fl.setAttribute('d', `M ${sx} ${fy} q ${s.spacing} ${dir * s.spacing * 0.5} ${s.spacing * 0.7} ${dir * s.spacing * 1.4}`);
+    fl.setAttribute('fill', 'none'); fl.setAttribute('stroke', s.color); fl.setAttribute('stroke-width', 1.8);
+    g.appendChild(fl);
+  }
+
+  // accidental
+  if (n.acc !== 0) {
+    const a = document.createElementNS(NS, 'text');
+    a.setAttribute('x', x - rx - 3); a.setAttribute('y', y + ry);
+    a.setAttribute('font-size', s.spacing * 1.8); a.setAttribute('text-anchor', 'end');
+    a.setAttribute('fill', s.color);
+    a.textContent = n.acc > 0 ? '♯' : '♭';
+    g.appendChild(a);
+  }
+
+  g.addEventListener('pointerdown', ev => {
+    if (state.tool === 'erase') {
+      ev.stopPropagation();
+      state.notes = state.notes.filter(x => x.id !== n.id);
+      render();
+    }
+  });
+  overlay.appendChild(g);
+}
+function addLedger(g, s, x, slot) {
+  const y = yFromSlot(s, slot);
+  const ln = document.createElementNS(NS, 'line');
+  ln.setAttribute('x1', x - s.spacing * 0.9); ln.setAttribute('x2', x + s.spacing * 0.9);
+  ln.setAttribute('y1', y); ln.setAttribute('y2', y);
+  ln.setAttribute('stroke', s.color); ln.setAttribute('stroke-width', 1.1);
+  g.appendChild(ln);
+}
+
+// ============================================================
+//  Pointer → SVG coords
+// ============================================================
+function svgPoint(ev) {
+  const r = overlay.getBoundingClientRect();
+  return {
+    x: (ev.clientX - r.left) / state.zoom,
+    y: (ev.clientY - r.top) / state.zoom,
+  };
+}
+
+function placeNote(ev, s) {
+  ev.stopPropagation();
+  const p = svgPoint(ev);
+  const dx = Math.min(1, Math.max(0, (p.x - s.x) / s.width));
+  const slot = slotFromY(s, p.y);
+  state.notes.push({ id: uid(), staffId: s.id, dx, slot, dur: state.dur, acc: state.acc });
+  selectStaff(s.id);
+  render();
+  const m = slotToMidi(slot, s.clef, state.acc);
+  status('Placed ' + midiToName(m) + ' (' + durName(state.dur) + ').');
+}
+
+function startStaffDrag(ev, s, mode) {
+  ev.stopPropagation(); ev.preventDefault();
+  selectStaff(s.id);
+  const start = svgPoint(ev);
+  const ox = s.x, oy = s.y, ow = s.width;
+  const move = e => {
+    const p = svgPoint(e);
+    if (mode === 'move') { s.x = ox + (p.x - start.x); s.y = oy + (p.y - start.y); }
+    else if (mode === 'width') { s.width = Math.max(80, ow + (p.x - start.x)); $('staffWidth').value = s.width; }
+    render();
+  };
+  const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+}
+
+// Pitch hover readout
+overlay.addEventListener('pointermove', ev => {
+  const s = sel(); if (!s) return;
+  const p = svgPoint(ev);
+  const slot = slotFromY(s, p.y);
+  $('pitchHover').textContent = midiToName(slotToMidi(slot, s.clef, state.acc));
+});
+
+// ============================================================
+//  Zoom
+// ============================================================
+function applyZoom() {
+  stage.style.transform = `scale(${state.zoom})`;
+  $('zoomLabel').textContent = Math.round(state.zoom * 100) + '%';
+}
+function fitZoom() {
+  if (!state.imgW) return;
+  const pad = 24;
+  const z = Math.min(
+    (stageWrap.clientWidth - pad) / state.imgW,
+    (stageWrap.clientHeight - pad) / state.imgH, 1);
+  state.zoom = Math.max(0.1, z); applyZoom();
+}
+$('zoomIn').onclick = () => { state.zoom = Math.min(4, state.zoom * 1.2); applyZoom(); };
+$('zoomOut').onclick = () => { state.zoom = Math.max(0.1, state.zoom / 1.2); applyZoom(); };
+$('zoomFit').onclick = fitZoom;
+
+// ============================================================
+//  Sequencing (shared by playback + MIDI)
+// ============================================================
+function sequence() {
+  // reading order: staves top→bottom, notes left→right within a staff
+  const ordered = [...state.staves].sort((a, b) => a.y - b.y);
+  const seq = [];
+  ordered.forEach(s => {
+    state.notes.filter(n => n.staffId === s.id)
+      .sort((a, b) => a.dx - b.dx)
+      .forEach(n => seq.push({ midi: slotToMidi(n.slot, s.clef, n.acc), beats: n.dur }));
+  });
+  return seq;
+}
+function durName(d) { return d <= 0.25 ? 'double croche' : d <= 0.5 ? 'croche' : 'noire'; }
+
+// ============================================================
+//  Playback (Web Audio)
+// ============================================================
+let audioCtx = null, playTimer = null, activeNodes = [];
+$('playBtn').onclick = playSequence;
+$('stopBtn').onclick = stopPlayback;
+function playSequence() {
+  const seq = sequence();
+  if (!seq.length) { status('No notes to play.'); return; }
+  stopPlayback();
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  const bpm = +$('tempo').value || 100;
+  const spb = 60 / bpm;
+  let t = audioCtx.currentTime + 0.1;
+  seq.forEach(ev => {
+    const dur = ev.beats * spb;
+    const freq = 440 * Math.pow(2, (ev.midi - 69) / 12);
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'triangle'; osc.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.25, t + 0.01);
+    g.gain.setValueAtTime(0.25, t + Math.max(0.02, dur * 0.8));
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(g).connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + dur + 0.02);
+    activeNodes.push(osc);
+    t += dur;
+  });
+  const total = (t - audioCtx.currentTime) * 1000;
+  status('Playing ' + seq.length + ' notes…');
+  playTimer = setTimeout(() => status('Playback finished.'), total);
+}
+function stopPlayback() {
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  activeNodes.forEach(n => { try { n.stop(); } catch (e) {} });
+  activeNodes = [];
+}
+
+// ============================================================
+//  MIDI export
+// ============================================================
+$('exportMidi').onclick = exportMidi;
+function exportMidi() {
+  const seq = sequence();
+  if (!seq.length) { status('Nothing to export — place some notes first.'); return; }
+  const bytes = buildMidi(seq, +$('tempo').value || 100);
+  const blob = new Blob([bytes], { type: 'audio/midi' });
+  downloadBlob(blob, 'partition.mid');
+  status('Exported partition.mid (' + seq.length + ' notes).');
+}
+function buildMidi(seq, bpm) {
+  const TPQ = 480;
+  const track = [];
+  const push = (...b) => b.forEach(x => track.push(x & 0xff));
+  const vlq = v => {
+    const buf = [v & 0x7f]; v >>= 7;
+    while (v > 0) { buf.unshift((v & 0x7f) | 0x80); v >>= 7; }
+    return buf;
+  };
+  // tempo meta
+  const mpqn = Math.round(60000000 / bpm);
+  push(0x00, 0xff, 0x51, 0x03, (mpqn >> 16) & 0xff, (mpqn >> 8) & 0xff, mpqn & 0xff);
+  // notes
+  seq.forEach(ev => {
+    const ticks = Math.round(ev.beats * TPQ);
+    vlq(0).forEach(push); push(0x90, ev.midi & 0x7f, 0x64);    // note on
+    vlq(ticks).forEach(push); push(0x80, ev.midi & 0x7f, 0x40); // note off
+  });
+  push(0x00, 0xff, 0x2f, 0x00); // end of track
+
+  const header = [
+    0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1,
+    (TPQ >> 8) & 0xff, TPQ & 0xff,
+  ];
+  const tlen = track.length;
+  const trkHead = [0x4d, 0x54, 0x72, 0x6b, (tlen >> 24) & 0xff, (tlen >> 16) & 0xff, (tlen >> 8) & 0xff, tlen & 0xff];
+  return new Uint8Array([...header, ...trkHead, ...track]);
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ============================================================
+//  Project save / load (JSON, includes image)
+// ============================================================
+$('saveProj').onclick = () => {
+  const data = {
+    v: 1, imageURL: state.imageURL, imgW: state.imgW, imgH: state.imgH,
+    staves: state.staves, notes: state.notes, tempo: +$('tempo').value, nextId: state.nextId,
+  };
+  downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), 'partition-project.json');
+  status('Project saved.');
+};
+$('loadProj').onclick = () => $('projInput').click();
+$('projInput').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      state.staves = d.staves || []; state.notes = d.notes || [];
+      state.nextId = d.nextId || 1; $('tempo').value = d.tempo || 100;
+      state.selectedStaff = state.staves[0]?.id ?? null;
+      if (d.imageURL) loadImage(d.imageURL); else render();
+      selectStaff(state.selectedStaff);
+      status('Project loaded.');
+    } catch (err) { status('Could not read project file.'); }
+  };
+  r.readAsText(f);
+};
+$('clearNotes').onclick = () => {
+  if (!state.notes.length) return;
+  state.notes = []; render(); status('All notes cleared.');
+};
+
+// ============================================================
+//  Misc
+// ============================================================
+function status(m) { $('statusMsg').textContent = m; }
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === '1') clickData('.tool', 'select');
+  if (e.key === '2') clickData('.tool', 'note');
+  if (e.key === '3') clickData('.tool', 'erase');
+  if (e.key === ' ') { e.preventDefault(); playSequence(); }
+});
+function clickData(selrc, val) {
+  const b = [...document.querySelectorAll(selrc)].find(x => (x.dataset.tool || x.dataset.dur) === val);
+  if (b) b.click();
+}
+window.addEventListener('resize', () => { /* keep zoom; user can refit */ });
+render();
+</script>
+</body>
+</html>
