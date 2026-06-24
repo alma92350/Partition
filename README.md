@@ -7,7 +7,9 @@ just open `index.html` in any modern browser.
 ## What it does
 
 1. **Upload** an image of a music partition. It is shown as a background layer
-   (adjustable opacity).
+   with adjustable **opacity** and an independent **image size** slider — resize the
+   image under the staves to match a printed staff to your overlay (this is separate
+   from the header zoom, which scales the whole view together).
 2. **Lay a staff ("portée")** over the image — a movable, resizable 5-line staff
    with a treble or bass clef. Add as many staves as you need and align each one
    with the printed staves on your image.

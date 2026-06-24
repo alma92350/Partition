@@ -126,6 +126,13 @@
         <input type="range" id="imgOpacity" min="0" max="100" value="100" />
         <span class="valbadge" id="imgOpacityVal">100</span>
       </div>
+      <div class="row">
+        <label class="small">Image size</label>
+        <input type="range" id="imgScale" min="10" max="400" step="1" value="100" />
+        <span class="valbadge" id="imgScaleVal">100%</span>
+      </div>
+      <button class="full" id="imgScaleReset">↺ Reset image size</button>
+      <div class="hint">Resizes the partition image under the staves (handy to match a printed staff to your overlay). Use the header zoom to scale everything together instead.</div>
     </div>
 
     <div class="group">
@@ -255,7 +262,8 @@ const STAFF_COLORS = ['#4f9dff','#ffb44f','#4fd07a','#e36bff','#ff6b6b','#37d6d6
 // ---- State -------------------------------------------------
 const state = {
   imageURL: null,
-  imgW: 0, imgH: 0,
+  imgW: 0, imgH: 0,       // natural pixel size of the uploaded image
+  imgScale: 1,            // user resize factor for the image (decoupled from staves)
   staves: [],          // {id, x, y, width, spacing, clef, color}
   notes: [],           // {id, staffId, dx (0..1), slot, dur, acc, dotted, type}
   selectedStaff: null,
@@ -318,11 +326,7 @@ function loadImage(url) {
   state.imageURL = url;
   img.onload = () => {
     state.imgW = img.naturalWidth; state.imgH = img.naturalHeight;
-    stage.style.width = state.imgW + 'px';
-    stage.style.height = state.imgH + 'px';
-    overlay.setAttribute('width', state.imgW);
-    overlay.setAttribute('height', state.imgH);
-    overlay.setAttribute('viewBox', `0 0 ${state.imgW} ${state.imgH}`);
+    updateStageSize();
     emptyHint.style.display = 'none';
     if (state.staves.length === 0) addStaff();
     fitZoom();
@@ -331,9 +335,32 @@ function loadImage(url) {
   };
   img.src = url;
 }
+// Size the working area, the <img>, and the SVG overlay to the (resized) image.
+// Staves live in these stage pixels, so changing imgScale moves the image
+// beneath the overlay without disturbing already-placed staves.
+function updateStageSize() {
+  const w = Math.max(1, Math.round(state.imgW * state.imgScale));
+  const h = Math.max(1, Math.round(state.imgH * state.imgScale));
+  stage.style.width = w + 'px'; stage.style.height = h + 'px';
+  img.style.width = w + 'px'; img.style.height = h + 'px';
+  overlay.setAttribute('width', w); overlay.setAttribute('height', h);
+  overlay.setAttribute('viewBox', `0 0 ${w} ${h}`);
+}
 $('imgOpacity').oninput = e => {
   img.style.opacity = e.target.value / 100;
   $('imgOpacityVal').textContent = e.target.value;
+};
+$('imgScale').oninput = e => {
+  if (!state.imgW) return;
+  state.imgScale = +e.target.value / 100;
+  $('imgScaleVal').textContent = e.target.value + '%';
+  updateStageSize();
+  render();
+};
+$('imgScaleReset').onclick = () => {
+  state.imgScale = 1;
+  $('imgScale').value = 100; $('imgScaleVal').textContent = '100%';
+  if (state.imgW) { updateStageSize(); render(); }
 };
 
 // ============================================================
@@ -832,9 +859,10 @@ function applyZoom() {
 function fitZoom() {
   if (!state.imgW) return;
   const pad = 24;
+  const w = state.imgW * state.imgScale, h = state.imgH * state.imgScale;
   const z = Math.min(
-    (stageWrap.clientWidth - pad) / state.imgW,
-    (stageWrap.clientHeight - pad) / state.imgH, 1);
+    (stageWrap.clientWidth - pad) / w,
+    (stageWrap.clientHeight - pad) / h, 1);
   state.zoom = Math.max(0.1, z); applyZoom();
 }
 $('zoomIn').onclick = () => { state.zoom = Math.min(4, state.zoom * 1.2); applyZoom(); };
@@ -993,7 +1021,8 @@ function downloadBlob(blob, name) {
 // ============================================================
 $('saveProj').onclick = () => {
   const data = {
-    v: 2, imageURL: state.imageURL, imgW: state.imgW, imgH: state.imgH,
+    v: 3, imageURL: state.imageURL, imgW: state.imgW, imgH: state.imgH,
+    imgScale: state.imgScale,
     staves: state.staves, notes: state.notes, tempo: +$('tempo').value,
     timeSig: state.timeSig, nextId: state.nextId,
   };
@@ -1014,6 +1043,9 @@ $('projInput').onchange = e => {
         state.timeSig = d.timeSig;
         $('tsNum').value = d.timeSig.num; $('tsDen').value = d.timeSig.den;
       }
+      state.imgScale = d.imgScale || 1;
+      $('imgScale').value = Math.round(state.imgScale * 100);
+      $('imgScaleVal').textContent = Math.round(state.imgScale * 100) + '%';
       state.selectedStaff = state.staves[0]?.id ?? null;
       if (d.imageURL) loadImage(d.imageURL); else render();
       selectStaff(state.selectedStaff);
