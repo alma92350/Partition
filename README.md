@@ -23,9 +23,13 @@ just open `index.html` in any modern browser.
 
 ### Extra features
 - **🔍 Auto-detect staves** — scans the uploaded image for horizontal staff lines,
-  clusters them into groups of five, and creates positioned, scaled staves
-  automatically. Fine-tune position/clef afterwards. (Heuristic; works best on
-  clean scans.)
+  clusters them into groups of five, and **adds** positioned, scaled staves
+  (it no longer wipes your existing work). It also **guesses the clef** from the
+  layout: staves that sit close together form a grand staff, so the top is treble
+  and the bottom is bass; lone staves default to treble. Fine-tune afterwards.
+  (Heuristic; works best on clean scans.)
+- **↶ Undo** — an undo button (and `Ctrl/Cmd+Z`) reverts the last change: placing or
+  erasing a note, adding/deleting a staff, auto-detecting, or clearing.
 - **Chords / polyphony** — notes sharing a horizontal column sound together and are
   written as simultaneous MIDI note-ons.
 - **Rests** — silent events that advance the clock (quarter/eighth/sixteenth, dottable).
@@ -53,7 +57,7 @@ open index.html          # macOS
 - Set the **Tempo**, hit **▶ Play**, then **💾 Export MIDI**.
 
 ### Keyboard shortcuts
-- `1` Move · `2` Note · `3` Erase · `Space` Play
+- `1` Move · `2` Note · `3` Erase · `Space` Play · `Ctrl/Cmd+Z` Undo
 
 ## How pitch is derived
 The bottom line of each staff is the clef anchor (treble → E4, bass → G2). Every

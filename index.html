@@ -106,6 +106,7 @@
 <header>
   <h1>🎼 Partition Copier <small>— trace a staff over your sheet, place notes, export MIDI</small></h1>
   <div style="flex:1"></div>
+  <button id="undoBtn" title="Undo (Ctrl+Z)" disabled style="margin-right:10px;">↶ Undo</button>
   <div class="zoomctl">
     <button id="zoomOut" title="Zoom out">−</button>
     <span class="pill" id="zoomLabel">100%</span>
@@ -269,6 +270,35 @@ const state = {
 };
 const uid = () => state.nextId++;
 
+// ---- Undo history ------------------------------------------
+const history = [];
+const HISTORY_MAX = 40;
+function snapshot() {
+  return JSON.stringify({ staves: state.staves, notes: state.notes, nextId: state.nextId, timeSig: state.timeSig });
+}
+function pushHistory() {
+  history.push(snapshot());
+  if (history.length > HISTORY_MAX) history.shift();
+  updateUndoBtn();
+}
+function undo() {
+  if (!history.length) { status('Nothing to undo.'); return; }
+  const snap = JSON.parse(history.pop());
+  state.staves = snap.staves; state.notes = snap.notes;
+  state.nextId = snap.nextId; state.timeSig = snap.timeSig;
+  $('tsNum').value = state.timeSig.num; $('tsDen').value = state.timeSig.den;
+  if (!state.staves.find(s => s.id === state.selectedStaff)) {
+    state.selectedStaff = state.staves[0]?.id ?? null;
+  }
+  selectStaff(state.selectedStaff);
+  render();
+  updateUndoBtn();
+  status('Undid last change.');
+}
+function updateUndoBtn() {
+  const b = $('undoBtn'); if (b) b.disabled = history.length === 0;
+}
+
 // ---- DOM refs ----------------------------------------------
 const $ = id => document.getElementById(id);
 const stage = $('stage'), overlay = $('overlay'), img = $('sheetImg');
@@ -348,7 +378,9 @@ function measureBeats() { return state.timeSig.num * (4 / state.timeSig.den); }
 //  Staves
 // ============================================================
 $('addStaff').onclick = addStaff;
+$('undoBtn').onclick = undo;
 function addStaff() {
+  pushHistory();
   const i = state.staves.length;
   const s = {
     id: uid(),
@@ -431,19 +463,47 @@ function autoDetectStaves() {
   }
   if (!detected.length) { status('Could not group lines into staves. Place staves manually.'); return; }
 
-  // Replace existing staves with detected ones.
-  state.notes = []; state.staves = [];
+  // Guess a clef for each detected staff from its grand-staff grouping.
+  const clefs = guessClefs(detected);
+
+  // Append detected staves to whatever is already there (undoable).
+  pushHistory();
+  const base = state.staves.length;
   detected.forEach((d, k) => {
     state.staves.push({
       id: uid(), x: Math.round(d.x), y: Math.round(d.y),
       width: Math.round(d.width), spacing: +d.spacing.toFixed(1),
-      clef: 'treble', color: STAFF_COLORS[k % STAFF_COLORS.length],
+      clef: clefs[k], color: STAFF_COLORS[(base + k) % STAFF_COLORS.length],
     });
   });
-  state.selectedStaff = state.staves[0].id;
+  state.selectedStaff = state.staves[base].id;
   selectStaff(state.selectedStaff);
   render();
-  status('Detected ' + detected.length + ' staff' + (detected.length === 1 ? '' : 's') + '. Fine-tune position/clef as needed.');
+  status('Detected ' + detected.length + ' staff' + (detected.length === 1 ? '' : 's')
+    + ' (added to ' + base + ' existing). Clefs guessed — adjust as needed.');
+}
+
+// Guess clefs: staves close together vertically form a "system" (e.g. a piano
+// grand staff). Within a multi-staff system the top staff is treble and the
+// bottom is bass; lone staves default to treble.
+function guessClefs(detected) {
+  const order = detected.map((d, i) => i).sort((a, b) => detected[a].y - detected[b].y);
+  const clefs = new Array(detected.length).fill('treble');
+  let sys = [order[0]];
+  const flush = () => {
+    if (sys.length >= 2) clefs[sys[sys.length - 1]] = 'bass'; // bottom of system = bass
+    sys.forEach((idx, j) => { if (j < sys.length - 1 || sys.length === 1) clefs[idx] = 'treble'; });
+  };
+  for (let k = 1; k < order.length; k++) {
+    const prev = detected[order[k - 1]], cur = detected[order[k]];
+    const prevBottom = prev.y + 4 * prev.spacing;
+    const gap = cur.y - prevBottom;
+    // same system if the gap is within ~3 staff-heights
+    if (gap < 4 * prev.spacing * 3) { sys.push(order[k]); }
+    else { flush(); sys = [order[k]]; }
+  }
+  flush();
+  return clefs;
 }
 
 function selectStaff(id) {
@@ -463,6 +523,7 @@ $('staffWidth').oninput = e => { const s = sel(); if (s) { s.width = +e.target.v
 $('staffSpacing').oninput = e => { const s = sel(); if (s) { s.spacing = +e.target.value; render(); } };
 $('delStaff').onclick = () => {
   const s = sel(); if (!s) return;
+  pushHistory();
   state.notes = state.notes.filter(n => n.staffId !== s.id);
   state.staves = state.staves.filter(x => x.id !== s.id);
   state.selectedStaff = state.staves[0]?.id ?? null;
@@ -610,7 +671,7 @@ function drawNote(n) {
   const g = document.createElementNS(NS, 'g');
   g.style.cursor = state.tool === 'erase' ? 'not-allowed' : 'pointer';
   const removeOnErase = ev => {
-    if (state.tool === 'erase') { ev.stopPropagation(); state.notes = state.notes.filter(x => x.id !== n.id); render(); }
+    if (state.tool === 'erase') { ev.stopPropagation(); pushHistory(); state.notes = state.notes.filter(x => x.id !== n.id); render(); }
   };
 
   if (n.type === 'rest') {
@@ -707,6 +768,7 @@ function svgPoint(ev) {
 
 function placeNote(ev, s) {
   ev.stopPropagation();
+  pushHistory();
   const p = svgPoint(ev);
   const dx = Math.min(1, Math.max(0, (p.x - s.x) / s.width));
   const slot = slotFromY(s, p.y);
@@ -935,6 +997,7 @@ $('projInput').onchange = e => {
   r.onload = () => {
     try {
       const d = JSON.parse(r.result);
+      history.length = 0; updateUndoBtn();
       state.staves = d.staves || []; state.notes = d.notes || [];
       state.nextId = d.nextId || 1; $('tempo').value = d.tempo || 100;
       if (d.timeSig) {
@@ -951,6 +1014,7 @@ $('projInput').onchange = e => {
 };
 $('clearNotes').onclick = () => {
   if (!state.notes.length) return;
+  pushHistory();
   state.notes = []; render(); status('All notes cleared.');
 };
 
@@ -959,6 +1023,7 @@ $('clearNotes').onclick = () => {
 // ============================================================
 function status(m) { $('statusMsg').textContent = m; }
 window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === '1') clickData('.tool', 'select');
   if (e.key === '2') clickData('.tool', 'note');
