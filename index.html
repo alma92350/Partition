@@ -160,7 +160,7 @@
         </div>
         <button class="full danger" id="delStaff">🗑 Delete this staff</button>
       </div>
-      <div class="hint">Drag the staff body to move it. Drag the round handle (left) to move, the square handle (right) to resize width.</div>
+      <div class="hint">Drag the staff body to move it. Round handle (left) = move, right square = width, bottom square = height. The Spacing slider also sets the height (4 × spacing).</div>
     </div>
 
     <div class="group">
@@ -649,18 +649,21 @@ function drawStaff(s) {
     const h1 = handle(s.x, mid, s.color, 'circle');
     h1.addEventListener('pointerdown', ev => startStaffDrag(ev, s, 'move'));
     g.appendChild(h1);
-    const h2 = handle(s.x + s.width, mid, '#fff', 'rect');
+    const h2 = handle(s.x + s.width, mid, '#fff', 'rect', 'ew-resize');
     h2.addEventListener('pointerdown', ev => startStaffDrag(ev, s, 'width'));
     g.appendChild(h2);
+    const h3 = handle(s.x + s.width / 2, s.y + 4 * s.spacing, '#fff', 'rect', 'ns-resize');
+    h3.addEventListener('pointerdown', ev => startStaffDrag(ev, s, 'height'));
+    g.appendChild(h3);
   }
   overlay.appendChild(g);
 }
-function handle(x, y, color, shape) {
+function handle(x, y, color, shape, cursor) {
   const el = document.createElementNS(NS, shape === 'circle' ? 'circle' : 'rect');
   if (shape === 'circle') { el.setAttribute('cx', x); el.setAttribute('cy', y); el.setAttribute('r', 6); }
   else { el.setAttribute('x', x - 5); el.setAttribute('y', y - 5); el.setAttribute('width', 10); el.setAttribute('height', 10); }
   el.setAttribute('fill', color); el.setAttribute('stroke', '#000'); el.setAttribute('stroke-width', 1);
-  el.style.cursor = shape === 'circle' ? 'move' : 'ew-resize';
+  el.style.cursor = cursor || (shape === 'circle' ? 'move' : 'ew-resize');
   return el;
 }
 
@@ -793,10 +796,17 @@ function startStaffDrag(ev, s, mode) {
   selectStaff(s.id);
   const start = svgPoint(ev);
   const ox = s.x, oy = s.y, ow = s.width;
+  let recorded = false;
   const move = e => {
+    if (!recorded) { pushHistory(); recorded = true; } // snapshot on first actual move
     const p = svgPoint(e);
     if (mode === 'move') { s.x = ox + (p.x - start.x); s.y = oy + (p.y - start.y); }
     else if (mode === 'width') { s.width = Math.max(80, ow + (p.x - start.x)); $('staffWidth').value = s.width; }
+    else if (mode === 'height') {
+      // total staff height = 4 * spacing; bottom handle follows the pointer
+      const sp = Math.max(6, Math.min(60, (p.y - oy) / 4));
+      s.spacing = +sp.toFixed(1); $('staffSpacing').value = s.spacing;
+    }
     render();
   };
   const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };

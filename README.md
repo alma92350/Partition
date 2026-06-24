@@ -50,7 +50,8 @@ open index.html          # macOS
 ### Quick workflow
 - **📁 Upload** your partition image.
 - **➕ Add staff**, then with the **✋ Move** tool drag it over a printed staff and
-  match its **Width** and **Spacing** sliders to the image.
+  match it to the image: drag the right handle for **width**, the bottom handle for
+  **height**, or use the **Width** / **Spacing** sliders (staff height = 4 × spacing).
 - Switch to the **🎵 Note** tool, choose a duration/accidental, and click to drop
   notes. The footer shows the pitch under the cursor.
 - Use **🩹 Erase** to remove notes.
