@@ -12,11 +12,26 @@ just open `index.html` in any modern browser.
    with a treble or bass clef. Add as many staves as you need and align each one
    with the printed staves on your image.
 3. **Copy the notes by hand.** Pick a duration — **noire** (♩, quarter),
-   **croche** (𝅘𝅥𝅮, eighth) or **double croche** (𝅘𝅥𝅯, sixteenth) — and an optional
-   accidental (♯ / ♮ / ♭), then click on the staff. The vertical position snaps to
-   lines and spaces and determines the pitch (ledger lines are drawn automatically).
-4. **Replay** the result in the browser (Web Audio) and **export a `.mid`** file.
-5. **Save / load** the whole project (image + staves + notes) as JSON.
+   **croche** (𝅘𝅥𝅮, eighth) or **double croche** (𝅘𝅥𝅯, sixteenth) — optionally **dotted**
+   (×1.5), plus an optional accidental (♯ / ♮ / ♭), then click on the staff. The
+   vertical position snaps to lines and spaces and determines the pitch (ledger
+   lines are drawn automatically). Stack notes at the same horizontal spot to build
+   a **chord**, or switch on **Rest** mode to drop rests.
+4. **Replay** the result in the browser (Web Audio — chords play polyphonically,
+   rests are honoured) and **export a `.mid`** file.
+5. **Save / load** the whole project (image + staves + notes + time signature) as JSON.
+
+### Extra features
+- **🔍 Auto-detect staves** — scans the uploaded image for horizontal staff lines,
+  clusters them into groups of five, and creates positioned, scaled staves
+  automatically. Fine-tune position/clef afterwards. (Heuristic; works best on
+  clean scans.)
+- **Chords / polyphony** — notes sharing a horizontal column sound together and are
+  written as simultaneous MIDI note-ons.
+- **Rests** — silent events that advance the clock (quarter/eighth/sixteenth, dottable).
+- **Dotted notes & rests** — toggle ● Dotted to multiply the duration by 1.5.
+- **Time signature** — choose numerator/denominator; barlines are drawn automatically
+  per staff and a time-signature meta event is written into the MIDI file.
 
 ## Usage
 

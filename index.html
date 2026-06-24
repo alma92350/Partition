@@ -139,6 +139,7 @@
     <div class="group">
       <h2>3 · Staves (portées)</h2>
       <button class="full" id="addStaff">➕ Add staff</button>
+      <button class="full" id="autoDetect" style="margin-top:6px;">🔍 Auto-detect staves from image</button>
       <div class="staff-list" id="staffList" style="margin-top:8px;"></div>
       <div id="staffProps" style="display:none; margin-top:10px;">
         <div class="row">
@@ -173,7 +174,23 @@
         <button data-acc="0" class="acc active" title="Natural">♮</button>
         <button data-acc="1" class="acc" title="Sharp">♯</button>
       </div>
-      <div class="hint">Click on a staff to drop a note. Vertical position snaps to lines &amp; spaces and decides the pitch.</div>
+      <div class="toolgrid" style="margin-top:6px;">
+        <button id="dotToggle" title="Dotted note / rest (×1.5 duration)">● Dotted</button>
+        <button id="restToggle" title="Place a rest instead of a note">𝄽 Rest</button>
+      </div>
+      <div class="hint">Click on a staff to drop a note. Vertical position snaps to lines &amp; spaces and decides the pitch. Stack notes at the same horizontal spot to build a <b>chord</b>.</div>
+    </div>
+
+    <div class="group">
+      <h2>Time signature</h2>
+      <div class="row" style="gap:6px;">
+        <select id="tsNum" style="width:auto;flex:1"></select>
+        <span style="color:var(--muted)">/</span>
+        <select id="tsDen" style="width:auto;flex:1">
+          <option>2</option><option selected>4</option><option>8</option><option>16</option>
+        </select>
+      </div>
+      <div class="hint">Barlines are drawn automatically per staff and written into the MIDI file.</div>
     </div>
 
     <div class="group">
@@ -239,11 +256,14 @@ const state = {
   imageURL: null,
   imgW: 0, imgH: 0,
   staves: [],          // {id, x, y, width, spacing, clef, color}
-  notes: [],           // {id, staffId, dx (0..1), slot, dur, acc}
+  notes: [],           // {id, staffId, dx (0..1), slot, dur, acc, dotted, type}
   selectedStaff: null,
   tool: 'select',
   dur: 0.5,
   acc: 0,
+  dotted: false,
+  rest: false,
+  timeSig: { num: 4, den: 4 },
   zoom: 1,
   nextId: 1,
 };
@@ -303,6 +323,26 @@ document.querySelectorAll('.acc').forEach(b => b.onclick = () => {
   state.acc = parseInt(b.dataset.acc);
   document.querySelectorAll('.acc').forEach(x => x.classList.toggle('active', x === b));
 });
+$('dotToggle').onclick = () => {
+  state.dotted = !state.dotted;
+  $('dotToggle').classList.toggle('active', state.dotted);
+};
+$('restToggle').onclick = () => {
+  state.rest = !state.rest;
+  $('restToggle').classList.toggle('active', state.rest);
+  status(state.rest ? 'Rest mode: clicks place rests.' : 'Note mode.');
+};
+// Time signature
+(function initTimeSig() {
+  const num = $('tsNum');
+  for (let i = 2; i <= 12; i++) {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = i; if (i === 4) o.selected = true; num.appendChild(o);
+  }
+  num.onchange = () => { state.timeSig.num = +num.value; render(); };
+  $('tsDen').onchange = e => { state.timeSig.den = +e.target.value; render(); };
+})();
+function measureBeats() { return state.timeSig.num * (4 / state.timeSig.den); }
 
 // ============================================================
 //  Staves
@@ -323,6 +363,89 @@ function addStaff() {
   selectStaff(s.id);
   render();
 }
+
+// ---- Auto-detect staves from the image ---------------------
+$('autoDetect').onclick = autoDetectStaves;
+function autoDetectStaves() {
+  if (!state.imageURL) { status('Upload an image first.'); return; }
+  status('Scanning image for staff lines…');
+  // draw image to an offscreen canvas (cap size for speed)
+  const maxW = 1400;
+  const scale = Math.min(1, maxW / state.imgW);
+  const cw = Math.round(state.imgW * scale), ch = Math.round(state.imgH * scale);
+  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(img, 0, 0, cw, ch);
+  let data;
+  try { data = ctx.getImageData(0, 0, cw, ch).data; }
+  catch (e) { status('Could not read image pixels (browser security). Place staves manually.'); return; }
+
+  // For each row: count dark pixels and track horizontal extent of dark runs.
+  const darkThresh = 130;          // luminance below this = "ink"
+  const rowDark = new Float32Array(ch);
+  const rowMinX = new Int32Array(ch).fill(cw);
+  const rowMaxX = new Int32Array(ch).fill(0);
+  for (let y = 0; y < ch; y++) {
+    let cnt = 0, minx = cw, maxx = 0;
+    for (let x = 0; x < cw; x++) {
+      const i = (y * cw + x) * 4;
+      const lum = 0.3 * data[i] + 0.59 * data[i + 1] + 0.11 * data[i + 2];
+      if (lum < darkThresh) { cnt++; if (x < minx) minx = x; if (x > maxx) maxx = x; }
+    }
+    rowDark[y] = cnt; rowMinX[y] = minx; rowMaxX[y] = maxx;
+  }
+  // Candidate staff-line rows: dark coverage across most of the width.
+  const widthThresh = cw * 0.4;
+  const isLine = y => rowDark[y] > widthThresh;
+  // Collapse runs of adjacent line-rows into single line centers.
+  const lines = [];
+  for (let y = 0; y < ch; y++) {
+    if (!isLine(y)) continue;
+    let y2 = y, minx = cw, maxx = 0;
+    while (y2 < ch && isLine(y2)) { minx = Math.min(minx, rowMinX[y2]); maxx = Math.max(maxx, rowMaxX[y2]); y2++; }
+    lines.push({ y: (y + y2 - 1) / 2, minx, maxx });
+    y = y2;
+  }
+  if (lines.length < 5) { status('Found only ' + lines.length + ' staff lines — try a cleaner scan or place staves manually.'); return; }
+
+  // Group consecutive lines with consistent spacing into staves of 5.
+  const detected = [];
+  let i = 0;
+  while (i + 4 < lines.length) {
+    const grp = lines.slice(i, i + 5);
+    const gaps = [];
+    for (let k = 1; k < 5; k++) gaps.push(grp[k].y - grp[k - 1].y);
+    const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    const consistent = gaps.every(g => Math.abs(g - avg) < avg * 0.5) && avg > 2;
+    if (consistent) {
+      const minx = Math.min(...grp.map(l => l.minx));
+      const maxx = Math.max(...grp.map(l => l.maxx));
+      detected.push({
+        y: grp[0].y / scale,
+        spacing: avg / scale,
+        x: minx / scale,
+        width: Math.max(40, (maxx - minx) / scale),
+      });
+      i += 5;
+    } else { i++; }
+  }
+  if (!detected.length) { status('Could not group lines into staves. Place staves manually.'); return; }
+
+  // Replace existing staves with detected ones.
+  state.notes = []; state.staves = [];
+  detected.forEach((d, k) => {
+    state.staves.push({
+      id: uid(), x: Math.round(d.x), y: Math.round(d.y),
+      width: Math.round(d.width), spacing: +d.spacing.toFixed(1),
+      clef: 'treble', color: STAFF_COLORS[k % STAFF_COLORS.length],
+    });
+  });
+  state.selectedStaff = state.staves[0].id;
+  selectStaff(state.selectedStaff);
+  render();
+  status('Detected ' + detected.length + ' staff' + (detected.length === 1 ? '' : 's') + '. Fine-tune position/clef as needed.');
+}
+
 function selectStaff(id) {
   state.selectedStaff = id;
   const s = state.staves.find(x => x.id === id);
@@ -380,6 +503,8 @@ function midiToName(m) {
 function bottomLineY(s) { return s.y + 4 * s.spacing; }            // y of line index 0 (bottom)
 function slotFromY(s, y) { return Math.round((bottomLineY(s) - y) / (s.spacing / 2)); }
 function yFromSlot(s, slot) { return bottomLineY(s) - slot * (s.spacing / 2); }
+// Duration in quarter-note beats, honouring the dot.
+function effBeats(n) { return n.dur * (n.dotted ? 1.5 : 1); }
 
 // ============================================================
 //  Render (SVG)
@@ -429,6 +554,34 @@ function drawStaff(s) {
   }
   g.appendChild(strip);
 
+  // time signature digits at the start of the staff
+  ['' + state.timeSig.num, '' + state.timeSig.den].forEach((txt, i) => {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', s.x + s.spacing * 0.9);
+    t.setAttribute('y', s.y + (i === 0 ? 1.7 : 3.7) * s.spacing);
+    t.setAttribute('font-size', s.spacing * 2.1);
+    t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', s.color);
+    t.setAttribute('opacity', 0.7); t.setAttribute('font-weight', '700');
+    t.textContent = txt;
+    g.appendChild(t);
+  });
+
+  // automatic barlines: draw before any event whose onset is a whole measure
+  const mb = measureBeats();
+  let onset = 0;
+  staffEvents(s).forEach(evn => {
+    if (onset > 1e-6 && Math.abs(onset / mb - Math.round(onset / mb)) < 1e-4) {
+      const bx = s.x + evn.dx * s.width - s.spacing * 0.6;
+      const bl = document.createElementNS(NS, 'line');
+      bl.setAttribute('x1', bx); bl.setAttribute('x2', bx);
+      bl.setAttribute('y1', s.y); bl.setAttribute('y2', s.y + 4 * s.spacing);
+      bl.setAttribute('stroke', s.color); bl.setAttribute('stroke-width', 1.4);
+      bl.setAttribute('opacity', 0.55);
+      g.appendChild(bl);
+    }
+    onset += evn.beats;
+  });
+
   // handles (only when selected & select tool)
   if (seld && state.tool === 'select') {
     const mid = s.y + 2 * s.spacing;
@@ -450,13 +603,32 @@ function handle(x, y, color, shape) {
   return el;
 }
 
+const REST_GLYPH = { 1: '𝄽', 0.5: '𝄾', 0.25: '𝄿' };
 function drawNote(n) {
   const s = state.staves.find(x => x.id === n.staffId); if (!s) return;
   const x = s.x + n.dx * s.width;
-  const y = yFromSlot(s, n.slot);
-  const rx = s.spacing * 0.62, ry = s.spacing * 0.46;
   const g = document.createElementNS(NS, 'g');
   g.style.cursor = state.tool === 'erase' ? 'not-allowed' : 'pointer';
+  const removeOnErase = ev => {
+    if (state.tool === 'erase') { ev.stopPropagation(); state.notes = state.notes.filter(x => x.id !== n.id); render(); }
+  };
+
+  if (n.type === 'rest') {
+    const ry = s.y + 2 * s.spacing;
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', x); t.setAttribute('y', ry + s.spacing);
+    t.setAttribute('font-size', s.spacing * 2.6);
+    t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', s.color);
+    t.textContent = REST_GLYPH[n.dur] || '𝄽';
+    g.appendChild(t);
+    if (n.dotted) addDot(g, x + s.spacing * 0.8, ry, s);
+    g.addEventListener('pointerdown', removeOnErase);
+    overlay.appendChild(g);
+    return;
+  }
+
+  const y = yFromSlot(s, n.slot);
+  const rx = s.spacing * 0.62, ry = s.spacing * 0.46;
 
   // ledger lines if outside the staff (slots 0..8 are on-staff)
   for (let sl = 10; sl <= n.slot; sl += 2) addLedger(g, s, x, sl);
@@ -501,14 +673,17 @@ function drawNote(n) {
     g.appendChild(a);
   }
 
-  g.addEventListener('pointerdown', ev => {
-    if (state.tool === 'erase') {
-      ev.stopPropagation();
-      state.notes = state.notes.filter(x => x.id !== n.id);
-      render();
-    }
-  });
+  // augmentation dot
+  if (n.dotted) addDot(g, x + rx + s.spacing * 0.45, y, s);
+
+  g.addEventListener('pointerdown', removeOnErase);
   overlay.appendChild(g);
+}
+function addDot(g, x, y, s) {
+  const d = document.createElementNS(NS, 'circle');
+  d.setAttribute('cx', x); d.setAttribute('cy', y); d.setAttribute('r', s.spacing * 0.22);
+  d.setAttribute('fill', s.color);
+  g.appendChild(d);
 }
 function addLedger(g, s, x, slot) {
   const y = yFromSlot(s, slot);
@@ -535,11 +710,20 @@ function placeNote(ev, s) {
   const p = svgPoint(ev);
   const dx = Math.min(1, Math.max(0, (p.x - s.x) / s.width));
   const slot = slotFromY(s, p.y);
-  state.notes.push({ id: uid(), staffId: s.id, dx, slot, dur: state.dur, acc: state.acc });
+  const n = {
+    id: uid(), staffId: s.id, dx, slot,
+    dur: state.dur, acc: state.acc, dotted: state.dotted,
+    type: state.rest ? 'rest' : 'note',
+  };
+  state.notes.push(n);
   selectStaff(s.id);
   render();
-  const m = slotToMidi(slot, s.clef, state.acc);
-  status('Placed ' + midiToName(m) + ' (' + durName(state.dur) + ').');
+  if (n.type === 'rest') {
+    status('Placed ' + durName(state.dur) + ' rest' + (state.dotted ? ' (dotted)' : '') + '.');
+  } else {
+    const m = slotToMidi(slot, s.clef, state.acc);
+    status('Placed ' + midiToName(m) + ' (' + durName(state.dur) + (state.dotted ? ' dotted' : '') + ').');
+  }
 }
 
 function startStaffDrag(ev, s, mode) {
@@ -588,15 +772,36 @@ $('zoomFit').onclick = fitZoom;
 // ============================================================
 //  Sequencing (shared by playback + MIDI)
 // ============================================================
+// Group a single staff's notes into ordered events.
+// Notes that fall within the same horizontal column become one chord event;
+// rests are standalone silent events. Each event: {pitches:[], beats, dx}.
+function staffEvents(s) {
+  const items = state.notes.filter(n => n.staffId === s.id)
+    .slice().sort((a, b) => a.dx - b.dx);
+  const tolDx = Math.min(0.05, (s.spacing * 0.9) / s.width); // chord column width
+  const events = [];
+  let cur = null;
+  for (const n of items) {
+    const beats = effBeats(n);
+    if (n.type === 'rest') {
+      events.push({ pitches: [], beats, dx: n.dx }); cur = null; continue;
+    }
+    const midi = slotToMidi(n.slot, s.clef, n.acc);
+    if (cur && cur.pitches.length && Math.abs(n.dx - cur.dx) <= tolDx) {
+      cur.pitches.push(midi);
+      cur.beats = Math.max(cur.beats, beats); // chord holds for its longest note
+    } else {
+      cur = { pitches: [midi], beats, dx: n.dx };
+      events.push(cur);
+    }
+  }
+  return events;
+}
+// Full piece as one ordered event stream (staves top→bottom).
 function sequence() {
-  // reading order: staves top→bottom, notes left→right within a staff
-  const ordered = [...state.staves].sort((a, b) => a.y - b.y);
   const seq = [];
-  ordered.forEach(s => {
-    state.notes.filter(n => n.staffId === s.id)
-      .sort((a, b) => a.dx - b.dx)
-      .forEach(n => seq.push({ midi: slotToMidi(n.slot, s.clef, n.acc), beats: n.dur }));
-  });
+  [...state.staves].sort((a, b) => a.y - b.y)
+    .forEach(s => staffEvents(s).forEach(e => seq.push(e)));
   return seq;
 }
 function durName(d) { return d <= 0.25 ? 'double croche' : d <= 0.5 ? 'croche' : 'noire'; }
@@ -615,23 +820,29 @@ function playSequence() {
   const bpm = +$('tempo').value || 100;
   const spb = 60 / bpm;
   let t = audioCtx.currentTime + 0.1;
+  let noteTotal = 0;
   seq.forEach(ev => {
     const dur = ev.beats * spb;
-    const freq = 440 * Math.pow(2, (ev.midi - 69) / 12);
-    const osc = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    osc.type = 'triangle'; osc.frequency.value = freq;
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.25, t + 0.01);
-    g.gain.setValueAtTime(0.25, t + Math.max(0.02, dur * 0.8));
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    osc.connect(g).connect(audioCtx.destination);
-    osc.start(t); osc.stop(t + dur + 0.02);
-    activeNodes.push(osc);
+    // rests (no pitches) simply advance the clock
+    const gain = ev.pitches.length > 1 ? 0.18 : 0.25; // soften chords
+    ev.pitches.forEach(midi => {
+      noteTotal++;
+      const freq = 440 * Math.pow(2, (midi - 69) / 12);
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'triangle'; osc.frequency.value = freq;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(gain, t + 0.01);
+      g.gain.setValueAtTime(gain, t + Math.max(0.02, dur * 0.8));
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      osc.connect(g).connect(audioCtx.destination);
+      osc.start(t); osc.stop(t + dur + 0.02);
+      activeNodes.push(osc);
+    });
     t += dur;
   });
   const total = (t - audioCtx.currentTime) * 1000;
-  status('Playing ' + seq.length + ' notes…');
+  status('Playing ' + noteTotal + ' notes (' + seq.length + ' events)…');
   playTimer = setTimeout(() => status('Playback finished.'), total);
 }
 function stopPlayback() {
@@ -650,7 +861,8 @@ function exportMidi() {
   const bytes = buildMidi(seq, +$('tempo').value || 100);
   const blob = new Blob([bytes], { type: 'audio/midi' });
   downloadBlob(blob, 'partition.mid');
-  status('Exported partition.mid (' + seq.length + ' notes).');
+  const noteCount = seq.reduce((a, e) => a + e.pitches.length, 0);
+  status('Exported partition.mid (' + noteCount + ' notes, ' + seq.length + ' events).');
 }
 function buildMidi(seq, bpm) {
   const TPQ = 480;
@@ -661,16 +873,33 @@ function buildMidi(seq, bpm) {
     while (v > 0) { buf.unshift((v & 0x7f) | 0x80); v >>= 7; }
     return buf;
   };
+  let pendingDelta = 0; // ticks carried over from rests
   // tempo meta
   const mpqn = Math.round(60000000 / bpm);
   push(0x00, 0xff, 0x51, 0x03, (mpqn >> 16) & 0xff, (mpqn >> 8) & 0xff, mpqn & 0xff);
-  // notes
+  // time signature meta (num, denom as power of two, 24 clocks/click, 8 32nds/quarter)
+  const denPow = Math.round(Math.log2(state.timeSig.den));
+  push(0x00, 0xff, 0x58, 0x04, state.timeSig.num & 0xff, denPow & 0xff, 0x18, 0x08);
+  // events: chords = several note-ons at the same time; rests = silent delta
   seq.forEach(ev => {
     const ticks = Math.round(ev.beats * TPQ);
-    vlq(0).forEach(push); push(0x90, ev.midi & 0x7f, 0x64);    // note on
-    vlq(ticks).forEach(push); push(0x80, ev.midi & 0x7f, 0x40); // note off
+    if (ev.pitches.length === 0) {
+      // rest: nothing sounds, but carry the duration onto the next event
+      pendingDelta += ticks;
+      return;
+    }
+    ev.pitches.forEach((m, i) => {
+      vlq(i === 0 ? pendingDelta : 0).forEach(push);
+      push(0x90, m & 0x7f, 0x64);            // note on (delta only before first)
+    });
+    pendingDelta = 0;
+    ev.pitches.forEach((m, i) => {
+      vlq(i === 0 ? ticks : 0).forEach(push);
+      push(0x80, m & 0x7f, 0x40);            // note off (duration before first)
+    });
   });
-  push(0x00, 0xff, 0x2f, 0x00); // end of track
+  vlq(pendingDelta).forEach(push);
+  push(0xff, 0x2f, 0x00); // end of track
 
   const header = [
     0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1,
@@ -692,8 +921,9 @@ function downloadBlob(blob, name) {
 // ============================================================
 $('saveProj').onclick = () => {
   const data = {
-    v: 1, imageURL: state.imageURL, imgW: state.imgW, imgH: state.imgH,
-    staves: state.staves, notes: state.notes, tempo: +$('tempo').value, nextId: state.nextId,
+    v: 2, imageURL: state.imageURL, imgW: state.imgW, imgH: state.imgH,
+    staves: state.staves, notes: state.notes, tempo: +$('tempo').value,
+    timeSig: state.timeSig, nextId: state.nextId,
   };
   downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), 'partition-project.json');
   status('Project saved.');
@@ -707,6 +937,10 @@ $('projInput').onchange = e => {
       const d = JSON.parse(r.result);
       state.staves = d.staves || []; state.notes = d.notes || [];
       state.nextId = d.nextId || 1; $('tempo').value = d.tempo || 100;
+      if (d.timeSig) {
+        state.timeSig = d.timeSig;
+        $('tsNum').value = d.timeSig.num; $('tsDen').value = d.timeSig.den;
+      }
       state.selectedStaff = state.staves[0]?.id ?? null;
       if (d.imageURL) loadImage(d.imageURL); else render();
       selectStaff(state.selectedStaff);
